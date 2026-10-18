@@ -7,7 +7,7 @@ For the .exe: just put your Render link in a text file called server_url.txt nex
 import os
 import sys
 
-DEFAULT_SERVER = "wss://CHANGE-ME.onrender.com"   # <-- put your own Render URL here (or use server_url.txt)
+DEFAULT_SERVER = "wss://browser-eu63.onrender.com"   # <-- put your own Render URL here (or use server_url.txt)
 URL_FILE = "server_url.txt"
 
 
