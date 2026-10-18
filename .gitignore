@@ -1,0 +1,8 @@
+node_modules/
+__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+server_url.txt
+.env

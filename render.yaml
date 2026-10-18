@@ -1,0 +1,18 @@
+# Optional: Render "Blueprint". You can also create the service by hand (see README).
+services:
+  - type: web
+    name: remote-screen
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: TURN_API_URL      # full URL of your TURN provider's "get credentials" API (returns JSON)
+        sync: false
+      - key: TURN_URL          # OR static: turn:host:3478?transport=udp,turn:host:3478?transport=tcp
+        sync: false
+      - key: TURN_USER
+        sync: false
+      - key: TURN_PASS
+        sync: false
