@@ -8,7 +8,11 @@ services:
     startCommand: node server.js
     healthCheckPath: /health
     envVars:
-      - key: TURN_API_URL      # full URL of your TURN provider's "get credentials" API (returns JSON)
+      - key: TURNIX_API_TOKEN  # Turnix.io API token
+        sync: false
+      - key: TURNIX_REGION     # optional, e.g. eu-central
+        sync: false
+      - key: TURN_API_URL      # (other providers) credentials API URL
         sync: false
       - key: TURN_URL          # OR static: turn:host:3478?transport=udp,turn:host:3478?transport=tcp
         sync: false

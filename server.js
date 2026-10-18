@@ -24,9 +24,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ------------------------------------------------------------------ ICE / TURN
 const STUN = { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] };
-const ICE_TTL_MS = 10 * 60 * 1000;   // refresh TURN credentials every 10 min
+// Turnix creates a NEW credential on every request, so cache longer (credentials live 24 h).
+// Other providers: refresh every 10 min. Override with ICE_CACHE_MINUTES.
+const ICE_TTL_MS = (parseFloat(process.env.ICE_CACHE_MINUTES) ||
+  (process.env.TURNIX_API_TOKEN ? 360 : 10)) * 60 * 1000;
 const ICE_RETRY_MS = 30 * 1000;      // retry sooner if the API failed
-let iceCache = { servers: null, at: 0, ttl: 0 };
+let iceCache = { servers: null, at: 0, ttl: 0, meta: { source: 'none' } };
 
 function isIceServer(s) { return s && s.urls && (typeof s.urls === 'string' || Array.isArray(s.urls)); }
 
@@ -36,6 +39,7 @@ function normalizeIce(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data.filter(isIceServer);
   if (data.iceServers) return normalizeIce(data.iceServers);
+  if (data.ice_servers) return normalizeIce(data.ice_servers);
   if (isIceServer(data)) return [data];
   return [];
 }
@@ -48,30 +52,77 @@ function turnApiUrl() {
   return null;
 }
 
+
+// ---- Turnix.io: POST https://turnix.io/api/v1/credentials/ice  (Authorization: Bearer <token>)
+async function fetchTurnix() {
+  const url = process.env.TURNIX_API_URL || 'https://turnix.io/api/v1/credentials/ice';
+  const ttl = parseInt(process.env.TURNIX_TTL || '86400', 10);   // 24 h: long sessions keep working
+  const region = process.env.TURNIX_REGION;                       // optional, e.g. eu-central
+  const bodies = [];
+  if (region) bodies.push({ ttl, preferredRegion: region });
+  bodies.push({ ttl });
+  bodies.push(null);                                              // plain request as in their quickstart
+  let lastErr = 'no attempt';
+  for (const body of bodies) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const headers = { Authorization: `Bearer ${process.env.TURNIX_API_TOKEN}` };
+      if (body) headers['Content-Type'] = 'application/json';
+      const res = await fetch(url, { method: 'POST', headers, body: body ? JSON.stringify(body) : undefined, signal: ctl.signal });
+      clearTimeout(t);
+      if (!res.ok) { lastErr = 'HTTP ' + res.status; if (res.status === 401 || res.status === 403) break; continue; }
+      const data = await res.json();
+      const servers = normalizeIce(data);
+      if (!servers.length) { lastErr = 'response had no ICE servers'; continue; }
+      return { servers, expiresAt: data.expiresAt || data.expires_at || null };
+    } catch (e) {
+      clearTimeout(t);
+      lastErr = e.message;
+    }
+  }
+  throw new Error(lastErr);
+}
+
 async function getIceServers() {
   const now = Date.now();
   if (iceCache.servers && now - iceCache.at < iceCache.ttl) return iceCache.servers;
 
   let turn = [];
   let apiFailed = false;
-  const url = turnApiUrl();
-  if (url) {
+  let meta = { source: 'none' };
+
+  if (process.env.TURNIX_API_TOKEN) {
     try {
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 7000);
-      const res = await fetch(url, { signal: ctl.signal });
-      clearTimeout(t);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      turn = normalizeIce(await res.json());
-      if (!turn.length) throw new Error('API returned no usable ICE servers');
+      const r = await fetchTurnix();
+      turn = r.servers;
+      meta = { source: 'turnix', expiresAt: r.expiresAt };
+      console.log(`[ice] Turnix OK (${turn.length} server entries${r.expiresAt ? ', expires ' + r.expiresAt : ''})`);
     } catch (e) {
       apiFailed = true;
-      console.error('[ice] TURN API failed:', e.message);
-      if (iceCache.servers) {            // keep the last good credentials
-        iceCache.at = now; iceCache.ttl = ICE_RETRY_MS;
-        return iceCache.servers;
+      console.error('[ice] Turnix API failed:', e.message);
+    }
+  } else {
+    const url = turnApiUrl();
+    if (url) {
+      try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 7000);
+        const res = await fetch(url, { signal: ctl.signal });
+        clearTimeout(t);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        turn = normalizeIce(await res.json());
+        if (!turn.length) throw new Error('API returned no usable ICE servers');
+        meta = { source: 'api' };
+      } catch (e) {
+        apiFailed = true;
+        console.error('[ice] TURN API failed:', e.message);
       }
     }
+  }
+  if (apiFailed && iceCache.servers && iceCache.meta.source !== 'none') {   // keep the last good credentials
+    iceCache.at = now; iceCache.ttl = ICE_RETRY_MS;
+    return iceCache.servers;
   }
   if (!turn.length && process.env.TURN_URL) {
     turn = [{
@@ -79,9 +130,10 @@ async function getIceServers() {
       username: process.env.TURN_USER,
       credential: process.env.TURN_PASS,
     }];
+    meta = { source: 'static' };
   }
   const servers = [STUN, ...turn];
-  iceCache = { servers, at: now, ttl: apiFailed ? ICE_RETRY_MS : ICE_TTL_MS };
+  iceCache = { servers, at: now, ttl: apiFailed ? ICE_RETRY_MS : ICE_TTL_MS, meta };
   return servers;
 }
 
@@ -118,8 +170,13 @@ function addFail(ip) {
   else f.count++;
 }
 
-app.get('/health', (req, res) => {
-  res.json({ ok: true, rooms: rooms.size, uptime: Math.round(process.uptime()) });
+app.get('/health', async (req, res) => {
+  let turn = { configured: false };
+  try {
+    const ice = await getIceServers();
+    turn = { configured: ice.length > 1, source: iceCache.meta.source, entries: ice.length - 1 };
+  } catch { /* ignore */ }
+  res.json({ ok: true, rooms: rooms.size, uptime: Math.round(process.uptime()), turn });
 });
 
 const server = http.createServer(app);
@@ -263,7 +320,7 @@ server.listen(PORT, async () => {
   console.log(`✅ Signaling server running on port ${PORT}`);
   const ice = await getIceServers();
   const turn = ice.length - 1;
-  console.log(turn > 0 ? `✅ TURN configured (${turn} server entry)` : '⚠️  No TURN configured — set TURN_API_URL or TURN_URL/TURN_USER/TURN_PASS');
+  console.log(turn > 0 ? `✅ TURN configured (${turn} server entry)` : '⚠️  No TURN configured — set TURNIX_API_TOKEN (or TURN_API_URL, or TURN_URL/TURN_USER/TURN_PASS)');
 });
 
 process.on('SIGTERM', () => { server.close(); process.exit(0); });

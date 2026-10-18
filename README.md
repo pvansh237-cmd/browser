@@ -26,17 +26,21 @@ git push -u origin main
 - **Environment** mein TURN ki details daal (neeche), phir deploy.
 
 ### TURN settings (Render → Environment)
-Apne TURN provider ke hisaab se **koi ek** tareeka:
+**Turnix.io ke liye (sirf 1 variable zaroori):**
 
-| Tareeka | Variables |
+| Key | Value |
 |---|---|
-| Provider ek "credentials API" deta hai (URL jo JSON deta hai) | `TURN_API_URL` = poora API URL (key ke saath) |
-| Metered | `METERED_DOMAIN` (jaise `myapp.metered.live`) + `METERED_API_KEY` |
-| Sirf username / password / server mila | `TURN_URL` (jaise `turn:SERVER:3478?transport=udp,turn:SERVER:3478?transport=tcp`), `TURN_USER`, `TURN_PASS` |
+| `TURNIX_API_TOKEN` | Turnix dashboard → API Tokens → Create new API Token (token sirf ek baar dikhta hai, copy kar le) |
+| `TURNIX_REGION` *(optional)* | jaise `eu-central` — TURN server ka region |
+| `TURNIX_TTL` *(optional)* | credentials ki life seconds mein, default 86400 (24 ghante) |
 
-- API ka jawab ye formats ho sakte hain, sab chalte hain: `[{urls,username,credential}]`, `{iceServers:[...]}`, `{iceServers:{...}}`, `{urls,username,credential}`.
-- API key sirf server pe rehti hai, browser ko nahi jaati. Credentials har 10 min mein khud refresh hote hain.
-- Deploy ke baad Render logs mein `✅ TURN configured` dikhna chahiye. `⚠️ No TURN configured` dikhe to variables check kar.
+Credentials tujhe dashboard mein khud nahi banane, server API token se apne aap le leta hai (aur refresh bhi karta hai).
+Token ko kabhi GitHub pe mat daal, sirf Render ke Environment mein.
+
+Doosre providers ke liye (agar kabhi badalna pade): `TURN_API_URL`, ya `METERED_DOMAIN` + `METERED_API_KEY`, ya `TURN_URL` + `TURN_USER` + `TURN_PASS`.
+
+**Check kaise karein:** deploy ke baad browser mein `https://<tera-link>/health` khol. `"turn":{"configured":true,"source":"turnix"...}` dikhna chahiye.
+Render logs mein `[ice] Turnix OK` dikhe to sab theek. `Turnix API failed: HTTP 401` = token galat.
 
 ## 3. Agent chalao (jis laptop ki screen share karni hai)
 Windows 10/11. Pehle ek baar:
